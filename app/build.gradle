@@ -367,7 +367,7 @@ android {
 
         chromium {
             dimension "backend"
-            resValue "string", "app_name", "Wolvic Chromium"
+            resValue "string", "app_name", "Wolvic for PortalVR"
             externalNativeBuild {
                 cmake {
                     cppFlags " -DCHROMIUM"
