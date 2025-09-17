@@ -1192,6 +1192,8 @@
     <!-- This string is displayed in the Bookmarks List for as the header of the most recently
          bookmarked items. -->
     <string name="bookmarks_recent">Recently Bookmarked</string>
+    <string name="bookmark_title_webxr_metaverse">WebXR Metaverse</string>
+    <string name="bookmark_title_vrsites">VR Sites</string>
 
     <!-- This string is displayed in the Bookmarks List as a tooltip of the button for showing
          all the bookmarks. -->
