@@ -58,6 +58,10 @@
 #include "vrb/Vector.h"
 #include "tiny_gltf.h"
 
+#include <cmath>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <android/asset_manager_jni.h>
 #include <array>
 #include <functional>
@@ -208,6 +212,7 @@ struct BrowserWorld::State {
   bool wasInGazeMode = false;
   WebXRInterstialState webXRInterstialState;
   vrb::Matrix widgetsYaw;
+  vrb::Matrix yawOffset;
   bool wasWebXRRendering = false;
   double lastBatteryLevelUpdate = -1.0;
   bool reorientRequested = false;
@@ -251,6 +256,7 @@ struct BrowserWorld::State {
     wasInGazeMode = false;
     webXRInterstialState = WebXRInterstialState::FORCED;
     widgetsYaw = vrb::Matrix::Identity();
+    yawOffset = vrb::Matrix::Identity();
   }
 
   void CheckBackButton();
@@ -947,6 +953,17 @@ BrowserWorld::RegisterDeviceDelegate(DeviceDelegatePtr aDelegate) {
     m.device->SetReorientClient(this);
     m.gestures = m.device->GetGestureDelegate();
     VRBrowser::OnMaxCompositionLayersAvailable(m.device->MaxCompositionLayers());
+
+    m.yawOffset = vrb::Matrix::Identity();
+    const auto deviceType = m.device->GetDeviceType();
+    if (deviceType == device::UnknownType) {
+      const vrb::Matrix flip = vrb::Matrix::Rotation(vrb::Vector(0.0f, 1.0f, 0.0f), static_cast<float>(M_PI));
+      m.yawOffset = flip;
+      m.device->SetReorientTransform(m.yawOffset);
+    } else {
+      m.device->SetReorientTransform(vrb::Matrix::Identity());
+    }
+    m.widgetsYaw = vrb::Matrix::Identity();
   } else if (previousDevice) {
     m.leftCamera = m.rightCamera = nullptr;
     m.controllers->Reset();
@@ -1779,6 +1796,7 @@ BrowserWorld::RecenterUIYaw(const YawTarget aTarget) {
     vrb::Vector vector = head.MultiplyDirection(vrb::Vector(1.0f, 0.0f, 0.0f));
     float yaw = atan2(vector.z(), vector.x());
     vrb::Matrix matrix = vrb::Matrix::Rotation(vrb::Vector(0.0f, 1.0f, 0.0f), -yaw);
+    matrix = matrix.PostMultiply(m.yawOffset);
     m.device->SetReorientTransform(matrix);
     m.widgetsYaw = vrb::Matrix::Identity();
   } else {
