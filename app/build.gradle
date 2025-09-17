@@ -105,6 +105,7 @@ def GECKO_RELEASE_VERSION_NAME = '1.8.1'
 def CHROMIUM_RELEASE_VERSION_NAME = '1.2.1'
 
 android {
+    ndkVersion "26.3.11579264"
     namespace 'com.igalia.wolvic'
     compileSdkVersion 35
     defaultConfig {

@@ -24,8 +24,11 @@ const float kPinchThreshold = 0.91f;
 OpenXRInputSourcePtr OpenXRInputSource::Create(XrInstance instance, XrSession session, OpenXRActionSet& actionSet, const XrSystemProperties& properties, OpenXRHandFlags handeness, int index)
 {
     OpenXRInputSourcePtr input(new OpenXRInputSource(instance, session, actionSet, properties, handeness, index));
-    if (XR_FAILED(input->Initialize()))
+    XrResult initResult = input->Initialize();
+    if (XR_FAILED(initResult)) {
+        VRB_WARN("OpenXRInputSource initialization failed for hand %s: %s", handeness == OpenXRHandFlags::Left ? "left" : "right", to_string(initResult));
         return nullptr;
+    }
     return input;
 }
 
@@ -78,15 +81,19 @@ XrResult OpenXRInputSource::Initialize()
 #else
     mDeviceType = DeviceUtils::GetDeviceTypeFromSystem();
 #endif
+
+    const bool includeAllControllerMappings = (mDeviceType == device::UnknownType);
     for (auto& mapping: OpenXRInputMappings) {
       // Always populate default/fall-back profiles
       if (mapping.controllerType == device::UnknownType) {
           mMappings.push_back(mapping);
           // Use the system's deviceType instead to ensure we get a valid VRController on WebXR sessions
-          mMappings.back().controllerType = mDeviceType;
+          if (mDeviceType != device::UnknownType) {
+              mMappings.back().controllerType = mDeviceType;
+          }
           continue;
       }
-      if (mDeviceType != mapping.controllerType)
+      if (!includeAllControllerMappings && mDeviceType != mapping.controllerType)
           continue;
       mMappings.push_back(mapping);
     }
@@ -134,26 +141,34 @@ XrResult OpenXRInputSource::Initialize()
         handTrackerInfo.hand = (mHandeness == OpenXRHandFlags::Right) ? XR_HAND_RIGHT_EXT : XR_HAND_LEFT_EXT;
         handTrackerInfo.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
 
-        RETURN_IF_XR_FAILED(OpenXRExtensions::sXrCreateHandTrackerEXT(mSession, &handTrackerInfo,
-                                                                      &mHandTracker));
-
-        mSupportsHandJointsMotionRangeInfo = OpenXRExtensions::IsExtensionSupported(XR_EXT_HAND_JOINTS_MOTION_RANGE_EXTENSION_NAME);
-        mSupportsFBHandTrackingAim = OpenXRExtensions::IsExtensionSupported(XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME);
-
-        if (!mIsHandInteractionSupported) {
-            if (mSupportsFBHandTrackingAim) {
-                mGestureManager = std::make_unique<OpenXRGestureManagerFBHandTrackingAim>();
-            } else {
-                // TODO: fine tune params for different devices.
-                OpenXRGestureManagerHandJoints::OneEuroFilterParams params= { 0.25, 1, 1 };
-                mGestureManager = std::make_unique<OpenXRGestureManagerHandJoints>(mHandJoints, &params);
-            }
-            VRB_LOG("OpenXR: using %s to compute hands aim", mSupportsFBHandTrackingAim ? XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME : "hand joints");
+        XrResult handTrackerResult = OpenXRExtensions::sXrCreateHandTrackerEXT(mSession, &handTrackerInfo,
+                                                                               &mHandTracker);
+        if (handTrackerResult == XR_ERROR_FEATURE_UNSUPPORTED) {
+            VRB_LOG("OpenXR hand tracking not supported by runtime for hand %s; continuing without it", mHandeness == OpenXRHandFlags::Left ? "left" : "right");
+            mHandTracker = XR_NULL_HANDLE;
+            mSupportsHandJointsMotionRangeInfo = false;
+            mSupportsFBHandTrackingAim = false;
         } else {
-            if (OpenXRExtensions::IsExtensionSupported(XR_EXT_HAND_INTERACTION_EXTENSION_NAME)) {
-                VRB_LOG("OpenXR: using %s to compute hands aim", XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
-            } else if (OpenXRExtensions::IsExtensionSupported(XR_MSFT_HAND_INTERACTION_EXTENSION_NAME)) {
-                VRB_LOG("OpenXR: using %s to compute hands aim", XR_MSFT_HAND_INTERACTION_EXTENSION_NAME);
+            RETURN_IF_XR_FAILED(handTrackerResult);
+
+            mSupportsHandJointsMotionRangeInfo = OpenXRExtensions::IsExtensionSupported(XR_EXT_HAND_JOINTS_MOTION_RANGE_EXTENSION_NAME);
+            mSupportsFBHandTrackingAim = OpenXRExtensions::IsExtensionSupported(XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME);
+
+            if (!mIsHandInteractionSupported) {
+                if (mSupportsFBHandTrackingAim) {
+                    mGestureManager = std::make_unique<OpenXRGestureManagerFBHandTrackingAim>();
+                } else {
+                    // TODO: fine tune params for different devices.
+                    OpenXRGestureManagerHandJoints::OneEuroFilterParams params= { 0.25, 1, 1 };
+                    mGestureManager = std::make_unique<OpenXRGestureManagerHandJoints>(mHandJoints, &params);
+                }
+                VRB_LOG("OpenXR: using %s to compute hands aim", mSupportsFBHandTrackingAim ? XR_FB_HAND_TRACKING_AIM_EXTENSION_NAME : "hand joints");
+            } else {
+                if (OpenXRExtensions::IsExtensionSupported(XR_EXT_HAND_INTERACTION_EXTENSION_NAME)) {
+                    VRB_LOG("OpenXR: using %s to compute hands aim", XR_EXT_HAND_INTERACTION_EXTENSION_NAME);
+                } else if (OpenXRExtensions::IsExtensionSupported(XR_MSFT_HAND_INTERACTION_EXTENSION_NAME)) {
+                    VRB_LOG("OpenXR: using %s to compute hands aim", XR_MSFT_HAND_INTERACTION_EXTENSION_NAME);
+                }
             }
         }
     }
@@ -757,13 +772,15 @@ void OpenXRInputSource::Update(const XrFrameState& frameState, XrSpace localSpac
     if (mActiveMapping &&
         ((mHandeness == OpenXRHandFlags::Left && !mActiveMapping->leftControllerModel) ||
          (mHandeness == OpenXRHandFlags::Right && !mActiveMapping->rightControllerModel))) {
+      VRB_WARN("Active OpenXR mapping %s missing controller model for hand %s; disabling controller %d", mActiveMapping->path, mHandeness == OpenXRHandFlags::Left ? "left" : "right", mIndex);
       delegate.SetEnabled(mIndex, false);
       return;
     }
 
     delegate.SetLeftHanded(mIndex, mHandeness == OpenXRHandFlags::Left);
     delegate.SetTargetRayMode(mIndex, device::TargetRayMode::TrackedPointer);
-    delegate.SetControllerType(mIndex, mDeviceType);
+    auto controllerType = mActiveMapping ? mActiveMapping->controllerType : mDeviceType;
+    delegate.SetControllerType(mIndex, controllerType);
 
     // Spaces must be created here, it doesn't work if they are created in Initialize (probably a OpenXR SDK bug?)
     if (mGripSpace == XR_NULL_HANDLE) {
@@ -791,6 +808,7 @@ void OpenXRInputSource::Update(const XrFrameState& frameState, XrSpace localSpac
     XrSpace baseSpace = localSpace;
 #endif
     if (XR_FAILED(GetPoseState(mPointerAction,  mPointerSpace, baseSpace, frameState, isPoseActive, poseLocation))) {
+        VRB_WARN("OpenXR GetPoseState failed for controller %d", mIndex);
         delegate.SetEnabled(mIndex, false);
         return;
     }
@@ -830,6 +848,7 @@ void OpenXRInputSource::Update(const XrFrameState& frameState, XrSpace localSpac
     }
 
     if (!mActiveMapping) {
+        VRB_WARN("OpenXR controller %d has no active mapping; controller hidden", mIndex);
         delegate.SetEnabled(mIndex, false);
         return;
     }
@@ -1039,7 +1058,11 @@ XrResult OpenXRInputSource::UpdateInteractionProfile(ControllerDelegate& delegat
 
 
     XrInteractionProfileState state{XR_TYPE_INTERACTION_PROFILE_STATE};
-    RETURN_IF_XR_FAILED(xrGetCurrentInteractionProfile(mSession, mSubactionPath, &state));
+    XrResult profileResult = xrGetCurrentInteractionProfile(mSession, mSubactionPath, &state);
+    if (XR_FAILED(profileResult)) {
+        VRB_WARN("xrGetCurrentInteractionProfile failed for hand %s: %s", mHandeness == OpenXRHandFlags::Left ? "left" : "right", to_string(profileResult));
+        return profileResult;
+    }
     if (state.interactionProfile == XR_NULL_PATH) {
         return XR_SUCCESS; // Not ready yet
     }
@@ -1063,6 +1086,10 @@ XrResult OpenXRInputSource::UpdateInteractionProfile(ControllerDelegate& delegat
             VRB_LOG("OpenXR: NEW active mapping %s", mActiveMapping->path);
             break;
         }
+    }
+
+    if (!mActiveMapping) {
+        VRB_WARN("No OpenXR input mapping resolved for path %s", path ? path : "<null>");
     }
 
     uint32_t numHaptics = 0;
