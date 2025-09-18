@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <sstream>
 #include <string.h>
+#include <android/log.h>
 
 #include "VRBrowser.h"
 
@@ -127,11 +128,22 @@ struct DeviceDelegateOpenXR::State {
   bool isEyeTrackingSupported { false };
   bool handTrackingEnabled { true };
   bool shouldUsePassthrough { false };
+  bool firstPoseLogged { false };
+  bool floorTransformLogged { false };
+  bool controllerOffsetLogged { false };
 
   bool IsPositionTrackingSupported() {
       CHECK(system != XR_NULL_SYSTEM_ID);
       CHECK(instance != XR_NULL_HANDLE);
       return systemProperties.trackingProperties.positionTracking == XR_TRUE;
+  }
+
+  bool ShouldUseDynamicFloorOffset() const {
+#if defined(HVR)
+      return false;
+#else
+      return deviceType == device::UnknownType;
+#endif
   }
 
   void Initialize() {
@@ -463,7 +475,11 @@ struct DeviceDelegateOpenXR::State {
 
     immersiveDisplay->SetDeviceName(systemProperties.systemName);
     immersiveDisplay->SetEyeResolution(viewConfig.front().recommendedImageRectWidth, viewConfig.front().recommendedImageRectHeight);
-    immersiveDisplay->SetSittingToStandingTransform(vrb::Matrix::Translation(kAverageHeight));
+    if (ShouldUseDynamicFloorOffset()) {
+        immersiveDisplay->SetSittingToStandingTransform(vrb::Matrix::Identity());
+    } else {
+        immersiveDisplay->SetSittingToStandingTransform(vrb::Matrix::Translation(kAverageHeight));
+    }
     auto toDeviceBlendModes = [](std::vector<XrEnvironmentBlendMode> aOpenXRBlendModes) {
         std::vector<device::BlendMode> deviceBlendModes;
         for (const auto& blendMode : aOpenXRBlendModes) {
@@ -1037,6 +1053,9 @@ DeviceDelegateOpenXR::ProcessEvents() {
       }
       case XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING:
         m.firstPose = std::nullopt;
+        m.firstPoseLogged = false;
+        m.floorTransformLogged = false;
+        m.controllerOffsetLogged = false;
         m.reorientRequested = true;
         VRB_DEBUG("OpenXR: reference space changed. User recentered the view?");
         break;
@@ -1117,6 +1136,9 @@ DeviceDelegateOpenXR::StartFrame(const FramePrediction aPrediction) {
   m.predictedPose = location.pose;
   if (!m.firstPose && location.pose.position.y != 0.0) {
     m.firstPose = location.pose;
+    if (!m.firstPoseLogged) {
+      m.firstPoseLogged = true;
+    }
   }
 
   vrb::Matrix head = XrPoseToMatrix(location.pose);
@@ -1150,7 +1172,17 @@ DeviceDelegateOpenXR::StartFrame(const FramePrediction aPrediction) {
       XrSpaceLocation stageLocation{XR_TYPE_SPACE_LOCATION};
       xrLocateSpace(m.localSpace, m.stageSpace, m.predictedDisplayTime, &stageLocation);
       vrb::Matrix transform = XrPoseToMatrix(stageLocation.pose);
+      // Monado reports stage space centered on the tracked head, so adjust with first pose when available.
+      float stageOffsetY = transform.GetTranslation().y();
+      if (m.firstPose.has_value() && fabsf(stageOffsetY) < 0.2f) {
+        float adjustedStageY = stageOffsetY + m.firstPose->position.y;
+        transform.TranslateInPlace(vrb::Vector(0.0f, adjustedStageY - stageOffsetY, 0.0f));
+        stageOffsetY = adjustedStageY;
+      }
       m.immersiveDisplay->SetSittingToStandingTransform(transform);
+      if (!m.floorTransformLogged) {
+        m.floorTransformLogged = true;
+      }
 #if HVR
       // Workaround for empty stage transform bug in HVR
       if (IsPositionTrackingSupported()) {
@@ -1164,6 +1196,14 @@ DeviceDelegateOpenXR::StartFrame(const FramePrediction aPrediction) {
       // Stage space coordinates are wrong. As an example the returned Y value is 0.008.
       m.immersiveDisplay->SetSittingToStandingTransform(vrb::Matrix::Translation(kAverageHeight * 0.7));
 #endif
+    } else if (m.ShouldUseDynamicFloorOffset()) {
+      const XrPosef& basePose = m.firstPose.value_or(XrPoseIdentity());
+      const float stageOffsetY = basePose.position.y;
+      m.immersiveDisplay->SetSittingToStandingTransform(
+          vrb::Matrix::Translation(vrb::Vector(0.0f, stageOffsetY, 0.0f)));
+      if (!m.floorTransformLogged) {
+        m.floorTransformLogged = true;
+      }
     }
 
     m.immersiveDisplay->SetCapabilityFlags(caps);
@@ -1225,6 +1265,9 @@ DeviceDelegateOpenXR::StartFrame(const FramePrediction aPrediction) {
     offsets.y() = -0.05;
     offsets.z() = 0.05;
 #endif
+    if (!m.controllerOffsetLogged) {
+      m.controllerOffsetLogged = true;
+    }
     m.input->Update(frameState, m.localSpace, head, offsets, m.renderMode, m.pointerMode, m.handTrackingEnabled, *m.controller);
   }
 
@@ -1624,6 +1667,9 @@ DeviceDelegateOpenXR::EnterVR(const crow::BrowserEGLContext& aEGLContext) {
   // Reset reorientation after Enter VR
   m.reorientMatrix = vrb::Matrix::Identity();
   m.firstPose = std::nullopt;
+  m.firstPoseLogged = false;
+  m.floorTransformLogged = false;
+  m.controllerOffsetLogged = false;
 
   if (m.session != XR_NULL_HANDLE && m.graphicsBinding.context == aEGLContext.Context()) {
 #if HVR

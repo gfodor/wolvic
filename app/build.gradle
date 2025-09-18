@@ -110,7 +110,7 @@ android {
     compileSdkVersion 35
     defaultConfig {
         applicationId "io.portalvr.wolvic"
-        minSdkVersion 24
+        minSdkVersion 33
         targetSdkVersion 34
         versionCode generatedVersionCode
         versionName "1.8"
@@ -228,7 +228,7 @@ android {
         // Supported platforms
         oculusvr {
             dimension "platform"
-            targetSdkVersion 32
+            targetSdkVersion 34
             buildConfigField "Boolean", "USE_SOUNDPOOL", "false"
             externalNativeBuild {
                 cmake {
@@ -271,7 +271,7 @@ android {
 
         spaces {
             dimension "platform"
-            targetSdkVersion 29
+            targetSdkVersion 34
             externalNativeBuild {
                 cmake {
                     cppFlags " -DSPACES -DOPENXR -I" + file("src/openxr/cpp").absolutePath
@@ -282,7 +282,7 @@ android {
 
         aosp {
             dimension "platform"
-            targetSdkVersion 29
+            targetSdkVersion 34
             externalNativeBuild {
                 cmake {
                     cppFlags " -DAOSP -DOPENXR -I" + file("src/openxr/cpp").absolutePath
