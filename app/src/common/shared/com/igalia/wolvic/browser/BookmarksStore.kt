@@ -13,9 +13,7 @@ import com.igalia.wolvic.R
 import com.igalia.wolvic.VRBrowserApplication
 import com.igalia.wolvic.utils.SystemUtils
 import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.future.future
-import kotlinx.coroutines.launch
 import mozilla.appservices.places.BookmarkRoot
 import mozilla.components.concept.storage.BookmarkNode
 import mozilla.components.concept.storage.BookmarkNodeType
@@ -81,7 +79,6 @@ class BookmarksStore constructor(val context: Context) {
         accountManager.registerForSyncEvents(
             syncStatusObserver, ProcessLifecycleOwner.get(), false
         )
-        ensureDefaultBookmarks()
     }
 
     // Update the folder strings after a language update
@@ -214,34 +211,6 @@ class BookmarksStore constructor(val context: Context) {
                 for (listener in listenersCopy) {
                     listener.onBookmarkAdded()
                 }
-            }
-        }
-    }
-
-    @OptIn(ExperimentalUnsignedTypes::class)
-    private fun ensureDefaultBookmarks() {
-        GlobalScope.launch(Dispatchers.IO) {
-            try {
-                val existing = storage.getTree(BookmarkRoot.Mobile.id)
-                val existingUrls = existing?.children?.mapNotNull { it.url }?.toSet() ?: emptySet()
-                val defaultBookmarks = listOf(
-                    Pair("https://webxr-metaverse.com", context.getString(R.string.bookmark_title_webxr_metaverse)),
-                    Pair("https://vrsites.com", context.getString(R.string.bookmark_title_vrsites))
-                )
-
-                var added = false
-                defaultBookmarks.forEach { (url, title) ->
-                    if (!existingUrls.contains(url)) {
-                        storage.addItem(BookmarkRoot.Mobile.id, url, title, null)
-                        added = true
-                    }
-                }
-
-                if (added) {
-                    notifyAddedListeners()
-                }
-            } catch (exception: Exception) {
-                Logger(LOGTAG).warn("Unable to ensure default bookmarks", exception)
             }
         }
     }
