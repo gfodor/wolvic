@@ -20,6 +20,24 @@ namespace {
 const float SecondsToNanoseconds = 1e9f;
 const int SecondsToNanosecondsI32 = int(1e9);
 const int MicrosecondsToNanoseconds = 1000;
+const double kWebXRFixedFOVDegrees = 45.0;
+
+inline void
+SetFixedFOV(mozilla::gfx::VRFieldOfView& aField) {
+  aField.upDegrees = kWebXRFixedFOVDegrees;
+  aField.rightDegrees = kWebXRFixedFOVDegrees;
+  aField.downDegrees = kWebXRFixedFOVDegrees;
+  aField.leftDegrees = kWebXRFixedFOVDegrees;
+}
+
+inline void
+SetFixedFOV(
+    std::array<mozilla::gfx::VRFieldOfView,
+               mozilla::gfx::VRDisplayState::NumEyes>& aFields) {
+  for (auto& field : aFields) {
+    SetFixedFOV(field);
+  }
+}
 
 class Lock {
   pthread_mutex_t* mMutex;
@@ -166,6 +184,7 @@ struct ExternalVR::State {
     system.displayState.isConnected = true;
     system.displayState.isMounted = true;
     system.displayState.nativeFramebufferScaleFactor = 1.0f;
+    SetFixedFOV(system.displayState.eyeFOV);
     const vrb::Matrix identity = vrb::Matrix::Identity();
     memcpy(system.sensorState.leftViewMatrix.data(), identity.Data(), arraySize(system.sensorState.leftViewMatrix));
     memcpy(system.sensorState.rightViewMatrix.data(), identity.Data(), arraySize(system.sensorState.rightViewMatrix));
@@ -360,10 +379,11 @@ ExternalVR::SetFieldOfView(const device::Eye aEye, const double aLeftDegrees,
   mozilla::gfx::VRDisplayState::Eye which = (aEye == device::Eye::Right
                                              ? mozilla::gfx::VRDisplayState::Eye_Right
                                              : mozilla::gfx::VRDisplayState::Eye_Left);
-  m.system.displayState.eyeFOV[which].upDegrees = aTopDegrees;
-  m.system.displayState.eyeFOV[which].rightDegrees = aRightDegrees;
-  m.system.displayState.eyeFOV[which].downDegrees = aBottomDegrees;
-  m.system.displayState.eyeFOV[which].leftDegrees = aLeftDegrees;
+  static_cast<void>(aLeftDegrees);
+  static_cast<void>(aRightDegrees);
+  static_cast<void>(aTopDegrees);
+  static_cast<void>(aBottomDegrees);
+  SetFixedFOV(m.system.displayState.eyeFOV[which]);
 }
 
 void
@@ -428,6 +448,7 @@ void
 ExternalVR::PushSystemState() {
   Lock lock(&(m.data.systemMutex));
   if (lock.IsLocked()) {
+    SetFixedFOV(m.system.displayState.eyeFOV);
     memcpy(&(m.data.state), &(m.system), sizeof(mozilla::gfx::VRSystemState));
     pthread_cond_signal(&m.data.systemCond);
   }
